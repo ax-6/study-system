@@ -11,13 +11,11 @@ import {
   getChatHistory,
 } from "@/app/actions/chat";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConversationSidebar } from "@/components/chat/conversation-sidebar";
 import {
-  Send,
   Bot,
   User,
   Loader2,
@@ -29,6 +27,7 @@ import {
   ArrowRight,
   Menu,
 } from "lucide-react";
+import { ChatInput } from "@/components/chat/chat-input";
 
 interface Message {
   id: string;
@@ -92,7 +91,6 @@ export default function Home() {
 
   // Messages for the active conversation
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
-  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -185,44 +183,71 @@ export default function Home() {
     }
   };
 
-  // Send a message
-  const handleSendMessage = async (text?: string) => {
-    const messageText = text || input.trim();
-    if (!messageText || isLoading) return;
+  // Send a message (with optional file attachments)
+  const handleSendMessage = async (text?: string, files?: File[]) => {
+    const messageText = (text || "").trim();
+    if ((!messageText && (!files || files.length === 0)) || isLoading) return;
 
     if (!user) {
       router.push("/login");
       return;
     }
 
+    const fileNames = files && files.length > 0
+      ? `\n📎 ${files.map((f) => f.name).join(", ")}`
+      : "";
+    const displayContent = messageText + fileNames;
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: messageText,
+      content: displayContent,
       timestamp: new Date(),
     };
 
     setMessages((prev) => {
-      // Remove welcome message if it's still there
       const filtered = prev.filter((m) => m.id !== "welcome");
       return [...filtered, userMessage];
     });
-    setInput("");
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // Use FormData when files are attached, JSON otherwise
+      let requestBody: FormData | string;
+      const headers: Record<string, string> = {};
+
+      if (files && files.length > 0) {
+        const formData = new FormData();
+        formData.append(
+          "messages",
+          JSON.stringify(
+            [...messages.filter((m) => m.id !== "welcome"), userMessage].map(
+              (msg) => ({ role: msg.role, content: msg.content })
+            )
+          )
+        );
+        if (activeConversationId) {
+          formData.append("conversationId", activeConversationId);
+        }
+        for (const file of files) {
+          formData.append("files", file);
+        }
+        requestBody = formData;
+        // Don't set Content-Type — browser will set multipart boundary
+      } else {
+        headers["Content-Type"] = "application/json";
+        requestBody = JSON.stringify({
           messages: [...messages.filter((m) => m.id !== "welcome"), userMessage].map(
-            (msg) => ({
-              role: msg.role,
-              content: msg.content,
-            })
+            (msg) => ({ role: msg.role, content: msg.content })
           ),
           conversationId: activeConversationId,
-        }),
+        });
+      }
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers,
+        body: requestBody,
       });
 
       if (!response.ok) throw new Error("Failed to fetch response");
@@ -346,13 +371,6 @@ export default function Home() {
       ]);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
     }
   };
 
@@ -552,34 +570,19 @@ export default function Home() {
           )}
 
           {/* Input Bar */}
-          <div className="mx-auto max-w-3xl p-4">
-            <div className="flex gap-2">
-              <Input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyPress}
-                placeholder={
-                  user
-                    ? "告诉我你想做什么... 例如：帮我添加一门高等数学课"
-                    : "登录后即可使用 AI 助手..."
-                }
-                disabled={isLoading}
-                className="flex-1"
-              />
-              <Button
-                onClick={() => handleSendMessage()}
-                disabled={!input.trim() || isLoading}
-                size="icon"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">
-              智学助手由 AI Agent 驱动，具备感知、规划与执行能力
+          <div className="mx-auto max-w-3xl">
+            <ChatInput
+              onSendMessage={handleSendMessage}
+              isLoading={isLoading}
+              placeholder={
+                user
+                  ? "告诉我你想做什么... 支持上传文件 📎"
+                  : "登录后即可使用 AI 助手..."
+              }
+              disabled={!user}
+            />
+            <p className="pb-2 text-center text-xs text-muted-foreground">
+              智学助手由 AI Agent 驱动 · 支持上传图片/PDF/文档/表格
             </p>
           </div>
         </div>

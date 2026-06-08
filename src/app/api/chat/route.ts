@@ -1,6 +1,18 @@
 import OpenAI from "openai";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import mammoth from "mammoth";
+import * as XLSX from "xlsx";
+
+async function parsePdf(buffer: Buffer): Promise<string> {
+  // Dynamic import to avoid build-time DOMMatrix issues
+  const pdfParse = (await import("pdf-parse" as string)).default as
+    | ((buffer: Buffer) => Promise<{ text: string }>)
+    | undefined;
+  if (!pdfParse) return "[pdf-parse 模块加载失败]";
+  const result = await pdfParse(buffer);
+  return result.text;
+}
 
 const openai = new OpenAI({
   baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -44,6 +56,108 @@ async function getUserId(): Promise<{ userId: string; email: string } | null> {
   } = await supabase.auth.getUser();
   if (!user?.id || !user?.email) return null;
   return { userId: user.id, email: user.email };
+}
+
+// Supported file types
+const SUPPORTED_FILE_TYPES: Record<string, string> = {
+  "application/pdf": "pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/vnd.ms-powerpoint": "ppt",
+  "text/plain": "txt",
+  "text/csv": "csv",
+  "image/jpeg": "image",
+  "image/png": "image",
+  "image/gif": "image",
+  "image/webp": "image",
+};
+
+interface UploadedFile {
+  name: string;
+  type: string;
+  data: string; // base64
+}
+
+interface ParsedFile {
+  name: string;
+  type: "text" | "image";
+  content: string; // extracted text or base64 data URI
+}
+
+async function parseFile(file: UploadedFile): Promise<ParsedFile> {
+  const buffer = Buffer.from(file.data, "base64");
+  const fileType = SUPPORTED_FILE_TYPES[file.type];
+
+  if (fileType === "image") {
+    return {
+      name: file.name,
+      type: "image",
+      content: `data:${file.type};base64,${file.data}`,
+    };
+  }
+
+  try {
+    if (fileType === "pdf") {
+      const text = await parsePdf(buffer);
+      return { name: file.name, type: "text", content: text };
+    }
+
+    if (fileType === "docx" || fileType === "doc") {
+      const result = await mammoth.extractRawText({ buffer });
+      return { name: file.name, type: "text", content: result.value };
+    }
+
+    if (fileType === "xlsx" || fileType === "xls") {
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const allText = workbook.SheetNames.map((name) => {
+        const sheet = workbook.Sheets[name];
+        return `[Sheet: ${name}]\n${XLSX.utils.sheet_to_csv(sheet)}`;
+      }).join("\n\n");
+      return { name: file.name, type: "text", content: allText };
+    }
+
+    if (fileType === "pptx" || fileType === "ppt") {
+      // PPT parsing: extract text from XML inside the pptx zip
+      const text = extractPptxText(buffer);
+      return { name: file.name, type: "text", content: text };
+    }
+
+    if (fileType === "txt" || fileType === "csv") {
+      return { name: file.name, type: "text", content: buffer.toString("utf-8") };
+    }
+  } catch (err) {
+    console.error(`Failed to parse file ${file.name}:`, err);
+    return { name: file.name, type: "text", content: `[文件解析失败: ${file.name}]` };
+  }
+
+  return { name: file.name, type: "text", content: `[不支持的文件类型: ${file.type}]` };
+}
+
+// Simple PPTX text extraction (pptx is a zip with XML files)
+function extractPptxText(buffer: Buffer): string {
+  try {
+    // Use Node.js zlib to extract text from the XML
+    const { unzipSync } = require("zlib");
+    // PPTX files are zip archives - look for slide XML files
+    // This is a simplified approach: scan for readable text patterns
+    const str = buffer.toString("latin1");
+    const textChunks: string[] = [];
+
+    // Extract text between <a:t> tags (PowerPoint text nodes)
+    const regex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
+    let match;
+    while ((match = regex.exec(str)) !== null) {
+      const text = match[1].trim();
+      if (text) textChunks.push(text);
+    }
+
+    return textChunks.join("\n") || "[无法提取PPT文本]";
+  } catch {
+    return "[PPT解析失败]";
+  }
 }
 
 const SYSTEM_PROMPT = `你是一个智能学习助手 Agent，名为"智学助手"，具备感知、规划与执行能力。
@@ -487,14 +601,38 @@ export async function POST(req: Request) {
   const supabase = await getSupabase();
   await ensureProfile(supabase, userId, email);
 
-  const body = await req.json();
-  const { messages, conversationId: inputConversationId } = body as {
-    messages: Array<{ role: string; content: string }>;
-    conversationId?: string;
-  };
+  // Parse request body (supports both JSON and multipart form data)
+  let messages: Array<{ role: string; content: string }>;
+  let conversationId: string | undefined;
+  let attachedFiles: UploadedFile[] = [];
+
+  const contentType = req.headers.get("content-type") || "";
+
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await req.formData();
+    messages = JSON.parse(formData.get("messages") as string);
+    conversationId = formData.get("conversationId") as string | undefined;
+
+    // Extract uploaded files
+    const files = formData.getAll("files");
+    for (const file of files) {
+      if (file instanceof File) {
+        const arrayBuffer = await file.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        attachedFiles.push({
+          name: file.name,
+          type: file.type,
+          data: base64,
+        });
+      }
+    }
+  } else {
+    const body = await req.json();
+    messages = body.messages;
+    conversationId = body.conversationId;
+  }
 
   // Resolve conversation ID: use provided one or create a new conversation
-  let conversationId = inputConversationId;
   if (!conversationId) {
     const firstUserMsg = messages.find((m) => m.role === "user");
     const title = firstUserMsg
@@ -515,26 +653,84 @@ export async function POST(req: Request) {
     conversationId = conv.id;
   }
 
-  // Save the latest user message to DB
+  // Parse uploaded files
+  const parsedFiles: ParsedFile[] = [];
+  for (const file of attachedFiles) {
+    parsedFiles.push(await parseFile(file));
+  }
+
+  // Save the latest user message to DB (include file info)
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   if (lastUserMsg) {
+    const fileNames = parsedFiles.length > 0
+      ? `\n[附件: ${parsedFiles.map((f) => f.name).join(", ")}]`
+      : "";
     await supabase
       .from("chat_messages")
       .insert({
         user_id: userId,
         role: "user",
-        content: lastUserMsg.content,
+        content: lastUserMsg.content + fileNames,
         conversation_id: conversationId,
       });
   }
 
-  // Build OpenAI-format messages
+  // Build dynamic system prompt with current time
+  const now = new Date();
+  const currentTimeStr = now.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const jsDay = now.getDay();
+  const dayOfWeek = jsDay === 0 ? 7 : jsDay;
+  const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const dayName = dayNames[jsDay];
+
+  const dynamicSystemPrompt = `${SYSTEM_PROMPT}
+
+## 当前时间信息
+- 当前时间：${currentTimeStr}
+- 今天是：${dayName}（day_of_week = ${dayOfWeek}）
+- 注意：课程表中的 day_of_week 使用 1=周一, 7=周日 的编号`;
+
+  // Build multimodal content for the last user message if files are attached
   const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...messages.map((msg) => ({
-      role: msg.role as "user" | "assistant",
-      content: msg.content,
-    })),
+    { role: "system", content: dynamicSystemPrompt },
+    ...messages.map((msg, idx): OpenAI.Chat.Completions.ChatCompletionMessageParam => {
+      // Attach files to the last user message
+      const isLastUserMsg = msg.role === "user" && idx === messages.length - 1;
+      if (isLastUserMsg && parsedFiles.length > 0) {
+        const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+        // Add images as image_url parts
+        for (const file of parsedFiles) {
+          if (file.type === "image") {
+            content.push({
+              type: "image_url",
+              image_url: { url: file.content },
+            });
+          }
+        }
+        // Add text content (user message + document extracts)
+        let textContent = msg.content;
+        const textFiles = parsedFiles.filter((f) => f.type === "text");
+        if (textFiles.length > 0) {
+          const fileContents = textFiles
+            .map((f) => `\n\n--- 文件: ${f.name} ---\n${f.content}`)
+            .join("\n");
+          textContent += fileContents;
+        }
+        content.push({ type: "text", text: textContent });
+        return { role: "user", content };
+      }
+      return { role: msg.role as "user" | "assistant", content: msg.content };
+    }),
   ];
 
   // Create a single stream for the entire response lifecycle.
@@ -551,7 +747,7 @@ export async function POST(req: Request) {
           rounds++;
 
           const completion = await openai.chat.completions.create({
-            model: "qwen-plus",
+            model: "qwen3.7-plus",
             messages: openaiMessages,
             tools,
             tool_choice: "auto",
@@ -623,7 +819,7 @@ export async function POST(req: Request) {
 
         // Otherwise, do a final streaming call (no tools) to generate the response
         const streamResponse = await openai.chat.completions.create({
-          model: "qwen-plus",
+          model: "qwen3.7-plus",
           messages: openaiMessages,
           stream: true,
         });

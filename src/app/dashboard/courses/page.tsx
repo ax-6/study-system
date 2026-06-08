@@ -1,19 +1,47 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BookOpen, Plus, Clock, MapPin, User, Trash2, Loader2 } from "lucide-react";
+import { Calendar as BigCalendar } from "react-big-calendar";
+import { startOfWeek, addDays, setHours, setMinutes } from "date-fns";
+import { localizer } from "@/lib/calendar-localizer";
 import { getCourses, createCourse, deleteCourse } from "@/app/actions/courses";
 import { CourseDialog } from "@/components/dialogs/course-dialog";
 import type { Course } from "@/types/database";
 
 const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-const timeSlots = [
-  "08:00", "09:00", "10:00", "11:00", "12:00",
-  "13:00", "14:00", "15:00", "16:00", "17:00",
-  "18:00", "19:00", "20:00",
-];
+
+const colorToHex: Record<string, string> = {
+  "bg-blue-500": "#3b82f6",
+  "bg-green-500": "#22c55e",
+  "bg-purple-500": "#a855f7",
+  "bg-red-500": "#ef4444",
+  "bg-yellow-500": "#eab308",
+  "bg-pink-500": "#ec4899",
+  "bg-indigo-500": "#6366f1",
+  "bg-teal-500": "#14b8a6",
+};
+
+function courseToEvent(course: Course, weekStart: Date) {
+  const dayOffset = course.day_of_week - 1;
+  const eventDate = addDays(weekStart, dayOffset);
+
+  const [startH, startM] = course.start_time.split(":").map(Number);
+  const [endH, endM] = course.end_time.split(":").map(Number);
+
+  const start = setMinutes(setHours(eventDate, startH), startM);
+  const end = setMinutes(setHours(eventDate, endH), endM);
+
+  return {
+    id: course.id,
+    title: course.name,
+    start,
+    end,
+    resource: course,
+  };
+}
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -54,17 +82,13 @@ export default function CoursesPage() {
     }
   };
 
-  const getCoursesForDay = (dayOfWeek: number) => {
-    return courses.filter((course) => course.day_of_week === dayOfWeek);
-  };
+  const events = useMemo(() => {
+    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    return courses.map((c) => courseToEvent(c, weekStart));
+  }, [courses]);
 
-  const getCourseStyle = (startTime: string, endTime: string) => {
-    const [startH, startM] = startTime.split(":").map(Number);
-    const [endH, endM] = endTime.split(":").map(Number);
-    const top = (startH - 8) * 60 + startM;
-    const height = (endH - startH) * 60 + (endM - startM);
-    return { top: `${top}px`, height: `${height}px` };
-  };
+  const minTime = useMemo(() => setMinutes(setHours(new Date(), 8), 0), []);
+  const maxTime = useMemo(() => setMinutes(setHours(new Date(), 21), 0), []);
 
   if (loading) {
     return (
@@ -92,62 +116,59 @@ export default function CoursesPage() {
           <CardTitle>本周课程安排</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-8 gap-4">
-            <div className="space-y-0">
-              <div className="h-12" />
-              {timeSlots.map((time) => (
-                <div
-                  key={time}
-                  className="flex h-[60px] items-center justify-end pr-2 text-xs text-muted-foreground"
-                >
-                  {time}
-                </div>
-              ))}
-            </div>
-            {dayNames.slice(1, 8).map((day, index) => (
-              <div key={day} className="relative">
-                <div className="flex h-12 items-center justify-center font-medium">
-                  {day}
-                </div>
-                <div className="relative h-[780px] border-l">
-                  {timeSlots.map((time) => (
-                    <div
-                      key={time}
-                      className="absolute w-full border-t border-muted"
-                      style={{
-                        top: `${(parseInt(time.split(":")[0]) - 8) * 60}px`,
-                      }}
-                    />
-                  ))}
-                  {getCoursesForDay(index + 1).map((course) => {
-                    const style = getCourseStyle(course.start_time, course.end_time);
-                    return (
-                      <div
-                        key={course.id}
-                        className={`absolute left-1 right-1 cursor-pointer overflow-hidden rounded-md p-2 text-xs text-white hover:opacity-90 ${course.color}`}
-                        style={style}
-                        onClick={() => handleDelete(course.id)}
-                        title="点击删除"
-                      >
-                        <div className="truncate font-medium">{course.name}</div>
-                        {course.location && (
-                          <div className="mt-1 flex items-center gap-1 opacity-90">
-                            <MapPin className="h-3 w-3" />
-                            <span className="truncate">{course.location}</span>
-                          </div>
-                        )}
-                        {course.instructor && (
-                          <div className="mt-1 flex items-center gap-1 opacity-90">
-                            <User className="h-3 w-3" />
-                            <span className="truncate">{course.instructor}</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+          <div className="h-[600px]">
+            <BigCalendar
+              localizer={localizer}
+              events={events}
+              defaultView="week"
+              views={["week", "day"]}
+              toolbar={false}
+              startAccessor="start"
+              endAccessor="end"
+              style={{ height: "100%" }}
+              eventPropGetter={(event) => {
+                const course = event.resource as Course;
+                return {
+                  style: {
+                    backgroundColor: colorToHex[course.color] || "#3b82f6",
+                    color: "white",
+                    borderRadius: "6px",
+                    border: "none",
+                    fontSize: "12px",
+                  },
+                };
+              }}
+              onSelectEvent={(event) => {
+                handleDelete(event.resource.id);
+              }}
+              min={minTime}
+              max={maxTime}
+              formats={{
+                dayHeaderFormat: (date: Date) => dayNames[date.getDay()],
+                timeGutterFormat: (date: Date) =>
+                  `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+              }}
+              messages={{
+                week: "周",
+                day: "天",
+                today: "今天",
+                previous: "上一周",
+                next: "下一周",
+              }}
+              components={{
+                event: ({ event }) => {
+                  const course = event.resource as Course;
+                  return (
+                    <div className="truncate px-1">
+                      <div className="truncate text-xs font-medium">{event.title}</div>
+                      {course.location && (
+                        <div className="truncate text-xs opacity-90">{course.location}</div>
+                      )}
+                    </div>
+                  );
+                },
+              }}
+            />
           </div>
         </CardContent>
       </Card>
