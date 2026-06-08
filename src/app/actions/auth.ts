@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 
+// 固定邀请码
+const VALID_INVITE_CODE = "axa6invitecode";
+
 // 表单验证 Schema
 const RegisterSchema = z.object({
   name: z
@@ -22,6 +25,9 @@ const RegisterSchema = z.object({
     .min(8, "密码至少需要 8 个字符")
     .regex(/[a-zA-Z]/, "密码必须包含至少一个字母")
     .regex(/[0-9]/, "密码必须包含至少一个数字"),
+  inviteCode: z
+    .string()
+    .min(1, "请输入邀请码"),
 });
 
 const LoginSchema = z.object({
@@ -40,6 +46,7 @@ export type AuthFormState = {
     name?: string[];
     email?: string[];
     password?: string[];
+    inviteCode?: string[];
   };
   message?: string;
 } | undefined;
@@ -53,6 +60,7 @@ export async function signUp(state: AuthFormState, formData: FormData) {
     name: formData.get("name"),
     email: formData.get("email"),
     password: formData.get("password"),
+    inviteCode: formData.get("inviteCode"),
   });
 
   if (!validatedFields.success) {
@@ -61,9 +69,16 @@ export async function signUp(state: AuthFormState, formData: FormData) {
     };
   }
 
-  const { name, email, password } = validatedFields.data;
+  const { name, email, password, inviteCode } = validatedFields.data;
 
-  // 2. 调用 Supabase 注册
+  // 2. 校验邀请码
+  if (inviteCode !== VALID_INVITE_CODE) {
+    return {
+      errors: { inviteCode: ["邀请码无效"] },
+    };
+  }
+
+  // 3. 调用 Supabase 注册
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -82,7 +97,7 @@ export async function signUp(state: AuthFormState, formData: FormData) {
     return { message: "注册失败，请稍后重试" };
   }
 
-  // 3. 如果注册成功但需要邮箱验证
+  // 4. 如果注册成功但需要邮箱验证
   if (data.user && !data.session) {
     return { message: "注册成功！请检查邮箱完成验证" };
   }

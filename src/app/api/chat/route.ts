@@ -286,6 +286,22 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+// Tool name → Chinese status label
+const TOOL_STATUS_LABELS: Record<string, string> = {
+  query_courses: "正在查询课程信息...",
+  create_course: "正在创建课程...",
+  update_course: "正在更新课程...",
+  delete_course: "正在删除课程...",
+  query_assignments: "正在查询作业列表...",
+  create_assignment: "正在创建作业...",
+  update_assignment_status: "正在更新作业状态...",
+  query_todos: "正在查询待办事项...",
+  create_todo: "正在创建待办事项...",
+  toggle_todo: "正在更新待办状态...",
+  query_grades: "正在查询成绩信息...",
+  create_grade: "正在添加成绩...",
+};
+
 // Execute a tool call and return the result
 async function executeTool(
   name: string,
@@ -450,6 +466,12 @@ async function executeTool(
 
 const MAX_TOOL_ROUNDS = 10;
 
+// SSE helpers
+const encoder = new TextEncoder();
+function sseEvent(controller: ReadableStreamDefaultController, data: unknown) {
+  controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+}
+
 export async function POST(req: Request) {
   const auth = await getUserId();
   if (!auth) {
@@ -470,6 +492,14 @@ export async function POST(req: Request) {
     messages: Array<{ role: string; content: string }>;
   };
 
+  // Save the latest user message to DB
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+  if (lastUserMsg) {
+    await supabase
+      .from("chat_messages")
+      .insert({ user_id: userId, role: "user", content: lastUserMsg.content });
+  }
+
   // Build OpenAI-format messages
   const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -479,119 +509,117 @@ export async function POST(req: Request) {
     })),
   ];
 
-  // --- Agentic loop: non-streaming tool calls ---
-  let rounds = 0;
-  while (rounds < MAX_TOOL_ROUNDS) {
-    rounds++;
-
-    const completion = await openai.chat.completions.create({
-      model: "qwen-plus",
-      messages: openaiMessages,
-      tools,
-      tool_choice: "auto",
-    });
-
-    const choice = completion.choices[0];
-    if (!choice) break;
-
-    const assistantMessage = choice.message;
-
-    // If no tool calls, the model is done — break out to stream the final answer
-    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      // Add the final assistant message to history
-      openaiMessages.push(assistantMessage);
-      break;
-    }
-
-    // Add assistant message with tool_calls to history
-    openaiMessages.push(assistantMessage);
-
-    // Execute each tool call and add results
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.type !== "function") continue;
-
-      let args: Record<string, unknown> = {};
-      try {
-        args = JSON.parse(toolCall.function.arguments || "{}");
-      } catch {
-        // Empty args
-      }
-
-      const result = await executeTool(toolCall.function.name, args, userId);
-
-      openaiMessages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: result,
-      });
-    }
-  }
-
-  // --- Final streaming response (no tools) ---
-  // If the last message is already an assistant message with content (no tool calls),
-  // we can just return it directly. Otherwise, do a streaming call without tools.
-  const lastMsg = openaiMessages[openaiMessages.length - 1];
-
-  // Check if the agentic loop already produced a final text response
-  const hasFinalText =
-    lastMsg.role === "assistant" &&
-    lastMsg.content &&
-    !("tool_calls" in lastMsg && lastMsg.tool_calls);
-
-  if (hasFinalText) {
-    // Return the final text as a single SSE chunk
-    const text = lastMsg.content as string;
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ type: "text-delta", delta: text })}\n\n`)
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
-  }
-
-  // Otherwise, do a final streaming call without tools to generate the response
-  const streamResponse = await openai.chat.completions.create({
-    model: "qwen-plus",
-    messages: openaiMessages,
-    stream: true,
-  });
-
-  const encoder = new TextEncoder();
+  // Create a single stream for the entire response lifecycle.
+  // The agentic loop + final streaming all happen inside `start()`,
+  // so the client receives status events and text deltas in real time.
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        // --- Agentic loop: non-streaming tool calls ---
+        let rounds = 0;
+        let finalAssistantText: string | null = null;
+
+        while (rounds < MAX_TOOL_ROUNDS) {
+          rounds++;
+
+          const completion = await openai.chat.completions.create({
+            model: "qwen-plus",
+            messages: openaiMessages,
+            tools,
+            tool_choice: "auto",
+          });
+
+          const choice = completion.choices[0];
+          if (!choice) break;
+
+          const assistantMessage = choice.message;
+
+          // If no tool calls, the model is done — capture final text and break
+          if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+            openaiMessages.push(assistantMessage);
+            finalAssistantText = assistantMessage.content;
+            break;
+          }
+
+          // Add assistant message with tool_calls to history
+          openaiMessages.push(assistantMessage);
+
+          // Execute each tool call, stream status updates
+          for (const toolCall of assistantMessage.tool_calls) {
+            if (toolCall.type !== "function") continue;
+
+            const toolName = toolCall.function.name;
+
+            // Push status event so the client knows what the agent is doing
+            sseEvent(controller, {
+              type: "status",
+              message: TOOL_STATUS_LABELS[toolName] || `正在执行: ${toolName}`,
+            });
+
+            let args: Record<string, unknown> = {};
+            try {
+              args = JSON.parse(toolCall.function.arguments || "{}");
+            } catch {
+              // Empty args
+            }
+
+            const result = await executeTool(toolName, args, userId);
+
+            openaiMessages.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: result,
+            });
+          }
+        }
+
+        // --- Final response ---
+        // If the agentic loop produced a final text without needing another LLM call
+        if (finalAssistantText) {
+          // Save to DB
+          await supabase
+            .from("chat_messages")
+            .insert({ user_id: userId, role: "assistant", content: finalAssistantText });
+
+          // Stream as a single chunk
+          sseEvent(controller, { type: "text-delta", delta: finalAssistantText });
+          sseEvent(controller, "[DONE]");
+          controller.close();
+          return;
+        }
+
+        // Otherwise, do a final streaming call (no tools) to generate the response
+        const streamResponse = await openai.chat.completions.create({
+          model: "qwen-plus",
+          messages: openaiMessages,
+          stream: true,
+        });
+
+        let assistantText = "";
         for await (const chunk of streamResponse) {
           const delta = chunk.choices[0]?.delta?.content;
           if (delta) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "text-delta", delta })}\n\n`
-              )
-            );
+            assistantText += delta;
+            sseEvent(controller, { type: "text-delta", delta });
           }
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        sseEvent(controller, "[DONE]");
+
+        // Save assistant message to DB after stream completes
+        if (assistantText) {
+          await supabase
+            .from("chat_messages")
+            .insert({ user_id: userId, role: "assistant", content: assistantText });
+        }
+
+        controller.close();
       } catch (err) {
-        console.error("Streaming error:", err);
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "text-delta", delta: "抱歉，生成回复时出现错误。" })}\n\n`
-          )
-        );
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      } finally {
+        console.error("Stream error:", err);
+        sseEvent(controller, {
+          type: "text-delta",
+          delta: "抱歉，处理请求时出现错误。",
+        });
+        sseEvent(controller, "[DONE]");
         controller.close();
       }
     },

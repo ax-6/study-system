@@ -106,6 +106,29 @@ export default function RegisterPage() {
           )}
         </div>
 
+        {/* 邀请码 */}
+        <div>
+          <label
+            htmlFor="inviteCode"
+            className="block text-sm font-medium text-gray-700"
+          >
+            邀请码
+          </label>
+          <input
+            id="inviteCode"
+            name="inviteCode"
+            type="text"
+            required
+            placeholder="请输入邀请码"
+            className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none sm:text-sm"
+          />
+          {state?.errors?.inviteCode && (
+            <p className="mt-1 text-sm text-red-500">
+              {state.errors.inviteCode[0]}
+            </p>
+          )}
+        </div>
+
         {/* 提交按钮 */}
         <button
           type="submit"

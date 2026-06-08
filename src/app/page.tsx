@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
+import { getChatHistory } from "@/app/actions/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,6 +27,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  status?: string; // Agent tool execution status
 }
 
 const quickActions = [
@@ -79,6 +81,25 @@ export default function Home() {
     scrollToBottom();
   }, [messages]);
 
+  // Load chat history when user is authenticated
+  useEffect(() => {
+    if (!user || loading) return;
+    let cancelled = false;
+    getChatHistory(100).then((history) => {
+      if (cancelled || !history || history.length === 0) return;
+      const loadedMessages: Message[] = history.map((msg) => ({
+        id: msg.id,
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+        timestamp: new Date(msg.created_at),
+      }));
+      setMessages(loadedMessages);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, loading]);
+
   const handleSendMessage = async (text?: string) => {
     const messageText = text || input.trim();
     if (!messageText || isLoading) return;
@@ -122,6 +143,7 @@ export default function Home() {
         role: "assistant",
         content: "",
         timestamp: new Date(),
+        status: "正在思考...",
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -139,12 +161,21 @@ export default function Home() {
             if (data === "[DONE]") continue;
             try {
               const parsed = JSON.parse(data);
-              if (parsed.type === "text-delta" && parsed.delta) {
+              if (parsed.type === "status" && parsed.message) {
+                // Update the status indicator on the assistant message
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessage.id
+                      ? { ...msg, status: parsed.message }
+                      : msg
+                  )
+                );
+              } else if (parsed.type === "text-delta" && parsed.delta) {
                 assistantContent += parsed.delta;
                 setMessages((prev) =>
                   prev.map((msg) =>
                     msg.id === assistantMessage.id
-                      ? { ...msg, content: assistantContent }
+                      ? { ...msg, content: assistantContent, status: undefined }
                       : msg
                   )
                 );
@@ -241,16 +272,28 @@ export default function Home() {
                       : "bg-muted"
                   }`}
                 >
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {message.content.split(/(\*\*.*?\*\*)/).map((part, i) => {
-                      if (part.startsWith("**") && part.endsWith("**")) {
-                        return (
-                          <strong key={i}>{part.slice(2, -2)}</strong>
-                        );
-                      }
-                      return <span key={i}>{part}</span>;
-                    })}
-                  </div>
+                  {/* Status indicator during tool execution */}
+                  {message.status && !message.content && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>{message.status}</span>
+                    </div>
+                  )}
+                  {/* Message content */}
+                  {message.content ? (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {message.content.split(/(\*\*.*?\*\*)/).map((part, i) => {
+                        if (part.startsWith("**") && part.endsWith("**")) {
+                          return (
+                            <strong key={i}>{part.slice(2, -2)}</strong>
+                          );
+                        }
+                        return <span key={i}>{part}</span>;
+                      })}
+                    </div>
+                  ) : !message.status ? (
+                    <div className="text-sm text-muted-foreground">...</div>
+                  ) : null}
                   <p className="mt-1.5 text-xs opacity-60">
                     {message.timestamp.toLocaleTimeString("zh-CN", {
                       hour: "2-digit",
