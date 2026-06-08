@@ -3,7 +3,6 @@
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   BookOpen,
   FileText,
@@ -13,8 +12,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Bot,
+  LogOut,
+  Sparkles,
 } from "lucide-react";
 import { useState } from "react";
+import { useAuth } from "@/components/providers/auth-provider";
+import { useRouter } from "next/navigation";
 
 interface SidebarProps {
   activeTab?: string;
@@ -22,17 +25,30 @@ interface SidebarProps {
   children?: React.ReactNode;
 }
 
+const mainTabs = [
+  { id: "agent", label: "AI Agent", icon: Sparkles, isHome: true },
+];
+
 const tabs = [
   { id: "courses", label: "课程表", icon: BookOpen },
   { id: "assignments", label: "作业", icon: FileText },
   { id: "todos", label: "日程", icon: Calendar },
   { id: "grades", label: "成绩", icon: BarChart3 },
-  { id: "chat", label: "AI 助手", icon: Bot },
   { id: "settings", label: "设置", icon: Settings },
 ];
 
 export function Sidebar({ activeTab = "courses", onTabChange, children }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { user, signOut } = useAuth();
+  const router = useRouter();
+
+  const handleTabClick = (tabId: string, isHome?: boolean) => {
+    if (isHome) {
+      router.push("/");
+    } else {
+      onTabChange?.(tabId);
+    }
+  };
 
   return (
     <aside
@@ -43,7 +59,10 @@ export function Sidebar({ activeTab = "courses", onTabChange, children }: Sideba
     >
       <div className="flex items-center justify-between border-b p-4">
         {!collapsed && (
-          <h2 className="text-lg font-semibold">学习助手</h2>
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-semibold">智学助手</h2>
+          </div>
         )}
         <Button
           variant="ghost"
@@ -60,6 +79,25 @@ export function Sidebar({ activeTab = "courses", onTabChange, children }: Sideba
       </div>
 
       <nav className="flex-1 space-y-1 p-2">
+        {/* AI Agent - Primary Feature */}
+        {mainTabs.map((tab) => (
+          <Button
+            key={tab.id}
+            variant="default"
+            className={cn(
+              "w-full justify-start gap-3",
+              collapsed && "justify-center px-0"
+            )}
+            onClick={() => handleTabClick(tab.id, tab.isHome)}
+          >
+            <tab.icon className="h-5 w-5 shrink-0" />
+            {!collapsed && <span>{tab.label}</span>}
+          </Button>
+        ))}
+
+        <div className="my-2 border-t" />
+
+        {/* Other tabs */}
         {tabs.map((tab) => (
           <Button
             key={tab.id}
@@ -68,7 +106,7 @@ export function Sidebar({ activeTab = "courses", onTabChange, children }: Sideba
               "w-full justify-start gap-3",
               collapsed && "justify-center px-0"
             )}
-            onClick={() => onTabChange?.(tab.id)}
+            onClick={() => handleTabClick(tab.id)}
           >
             <tab.icon className="h-5 w-5 shrink-0" />
             {!collapsed && <span>{tab.label}</span>}
@@ -81,6 +119,26 @@ export function Sidebar({ activeTab = "courses", onTabChange, children }: Sideba
           <div className="p-4">{children}</div>
         </ScrollArea>
       )}
+
+      {/* User info and logout */}
+      <div className="border-t p-4">
+        {user && !collapsed && (
+          <div className="mb-2 truncate text-xs text-muted-foreground">
+            {user.email}
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          className={cn(
+            "w-full justify-start gap-3 text-red-600 hover:bg-red-50 hover:text-red-700",
+            collapsed && "justify-center px-0"
+          )}
+          onClick={signOut}
+        >
+          <LogOut className="h-5 w-5 shrink-0" />
+          {!collapsed && <span>退出登录</span>}
+        </Button>
+      </div>
     </aside>
   );
 }

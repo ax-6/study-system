@@ -15,7 +15,6 @@ export default function DashboardLayout({
   const [activeTab, setActiveTab] = useState("courses");
 
   useEffect(() => {
-    // Determine active tab based on pathname
     if (pathname.includes("/dashboard/courses")) {
       setActiveTab("courses");
     } else if (pathname.includes("/dashboard/assignments")) {
@@ -24,8 +23,6 @@ export default function DashboardLayout({
       setActiveTab("todos");
     } else if (pathname.includes("/dashboard/grades")) {
       setActiveTab("grades");
-    } else if (pathname.includes("/dashboard/chat")) {
-      setActiveTab("chat");
     } else if (pathname.includes("/dashboard/settings")) {
       setActiveTab("settings");
     } else {

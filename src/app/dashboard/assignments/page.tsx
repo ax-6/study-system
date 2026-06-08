@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,16 +12,20 @@ import {
   CheckCircle,
   Circle,
   BookOpen,
+  Loader2,
+  Trash2,
 } from "lucide-react";
+import {
+  getAssignments,
+  createAssignment,
+  updateAssignmentStatus,
+  deleteAssignment,
+} from "@/app/actions/assignments";
+import { AssignmentDialog } from "@/components/dialogs/assignment-dialog";
+import type { Assignment } from "@/types/database";
 
-interface Assignment {
-  id: string;
-  title: string;
-  description: string;
-  courseName: string;
-  dueDate: string;
-  priority: "low" | "medium" | "high";
-  status: "pending" | "in_progress" | "completed" | "overdue";
+interface AssignmentWithCourse extends Assignment {
+  courses: { name: string } | null;
 }
 
 const priorityColors = {
@@ -30,11 +34,7 @@ const priorityColors = {
   high: "bg-red-500/10 text-red-500",
 };
 
-const priorityLabels = {
-  low: "低",
-  medium: "中",
-  high: "高",
-};
+const priorityLabels = { low: "低", medium: "中", high: "高" };
 
 const statusIcons = {
   pending: Circle,
@@ -58,76 +58,56 @@ const statusLabels = {
 };
 
 export default function AssignmentsPage() {
-  const [assignments] = useState<Assignment[]>([
-    {
-      id: "1",
-      title: "数学作业第 5 章",
-      description: "完成第 5 章课后习题 1-10 题",
-      courseName: "高等数学",
-      dueDate: "2024-03-15",
-      priority: "high",
-      status: "pending",
-    },
-    {
-      id: "2",
-      title: "数据结构实验报告",
-      description: "完成链表实验并撰写实验报告",
-      courseName: "数据结构",
-      dueDate: "2024-03-16",
-      priority: "medium",
-      status: "in_progress",
-    },
-    {
-      id: "3",
-      title: "英语作文",
-      description: "写一篇关于环境保护的英语作文",
-      courseName: "英语写作",
-      dueDate: "2024-03-18",
-      priority: "low",
-      status: "pending",
-    },
-    {
-      id: "4",
-      title: "数学期中考试复习",
-      description: "复习第 1-5 章内容",
-      courseName: "高等数学",
-      dueDate: "2024-03-20",
-      priority: "high",
-      status: "pending",
-    },
-    {
-      id: "5",
-      title: "数据结构课程设计",
-      description: "完成二叉树的课程设计",
-      courseName: "数据结构",
-      dueDate: "2024-03-25",
-      priority: "medium",
-      status: "pending",
-    },
-    {
-      id: "6",
-      title: "英语阅读理解",
-      description: "完成阅读理解练习",
-      courseName: "英语写作",
-      dueDate: "2024-03-10",
-      priority: "low",
-      status: "completed",
-    },
-    {
-      id: "7",
-      title: "数学作业第 4 章",
-      description: "完成第 4 章课后习题",
-      courseName: "高等数学",
-      dueDate: "2024-03-08",
-      priority: "medium",
-      status: "overdue",
-    },
-  ]);
+  const [assignments, setAssignments] = useState<AssignmentWithCourse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [filter, setFilter] = useState<
+    "all" | "pending" | "in_progress" | "completed" | "overdue"
+  >("all");
 
-  const [filter, setFilter] = useState<"all" | "pending" | "in_progress" | "completed" | "overdue">("all");
+  const loadAssignments = useCallback(async () => {
+    const data = await getAssignments();
+    setAssignments(data as AssignmentWithCourse[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadAssignments();
+  }, [loadAssignments]);
+
+  const handleCreate = async (data: {
+    title: string;
+    description?: string;
+    course_id?: string;
+    due_date: string;
+    priority?: "low" | "medium" | "high";
+  }) => {
+    const result = await createAssignment(data);
+    if (result.success) {
+      await loadAssignments();
+    }
+  };
+
+  const handleStatusChange = async (
+    id: string,
+    status: "pending" | "in_progress" | "completed" | "overdue"
+  ) => {
+    const result = await updateAssignmentStatus(id, status);
+    if (result.success) {
+      await loadAssignments();
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("确定要删除这个作业吗？")) return;
+    const result = await deleteAssignment(id);
+    if (result.success) {
+      await loadAssignments();
+    }
+  };
 
   const filteredAssignments = assignments.filter(
-    (assignment) => filter === "all" || assignment.status === filter
+    (a) => filter === "all" || a.status === filter
   );
 
   const stats = {
@@ -139,12 +119,17 @@ export default function AssignmentsPage() {
   };
 
   const getDaysUntilDue = (dueDate: string) => {
-    const due = new Date(dueDate);
-    const now = new Date();
-    const diffTime = due.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
+    const diffTime = new Date(dueDate).getTime() - Date.now();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -153,77 +138,51 @@ export default function AssignmentsPage() {
           <h1 className="text-3xl font-bold">作业管理</h1>
           <p className="text-muted-foreground">管理你的作业和任务</p>
         </div>
-        <Button>
+        <Button onClick={() => setDialogOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           添加作业
         </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-        <Card
-          className={`cursor-pointer ${filter === "all" ? "border-primary" : ""}`}
-          onClick={() => setFilter("all")}
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">全部作业</CardTitle>
-            <FileText className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className={`cursor-pointer ${filter === "pending" ? "border-primary" : ""}`}
-          onClick={() => setFilter("pending")}
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">待完成</CardTitle>
-            <Circle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.pending}</div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className={`cursor-pointer ${filter === "in_progress" ? "border-primary" : ""}`}
-          onClick={() => setFilter("in_progress")}
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">进行中</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.inProgress}</div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className={`cursor-pointer ${filter === "completed" ? "border-primary" : ""}`}
-          onClick={() => setFilter("completed")}
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">已完成</CardTitle>
-            <CheckCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.completed}</div>
-          </CardContent>
-        </Card>
-
-        <Card
-          className={`cursor-pointer ${filter === "overdue" ? "border-primary" : ""}`}
-          onClick={() => setFilter("overdue")}
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">已逾期</CardTitle>
-            <AlertCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.overdue}</div>
-          </CardContent>
-        </Card>
+        {(
+          [
+            { key: "all", label: "全部作业", icon: FileText, count: stats.total },
+            { key: "pending", label: "待完成", icon: Circle, count: stats.pending },
+            {
+              key: "in_progress",
+              label: "进行中",
+              icon: Clock,
+              count: stats.inProgress,
+            },
+            {
+              key: "completed",
+              label: "已完成",
+              icon: CheckCircle,
+              count: stats.completed,
+            },
+            {
+              key: "overdue",
+              label: "已逾期",
+              icon: AlertCircle,
+              count: stats.overdue,
+            },
+          ] as const
+        ).map(({ key, label, icon: Icon, count }) => (
+          <Card
+            key={key}
+            className={`cursor-pointer ${filter === key ? "border-primary" : ""}`}
+            onClick={() => setFilter(key)}
+          >
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">{label}</CardTitle>
+              <Icon className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{count}</div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <Card>
@@ -232,70 +191,122 @@ export default function AssignmentsPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {filteredAssignments.map((assignment) => {
-              const StatusIcon = statusIcons[assignment.status];
-              const daysUntilDue = getDaysUntilDue(assignment.dueDate);
+            {filteredAssignments.length > 0 ? (
+              filteredAssignments.map((assignment) => {
+                const StatusIcon = statusIcons[assignment.status];
+                const daysUntilDue = getDaysUntilDue(assignment.due_date);
 
-              return (
-                <div
-                  key={assignment.id}
-                  className="flex items-start gap-4 rounded-lg border p-4"
-                >
-                  <div className={`mt-1 ${statusColors[assignment.status]}`}>
-                    <StatusIcon className="h-5 w-5" />
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-medium">{assignment.title}</h3>
-                      <Badge variant="outline" className={priorityColors[assignment.priority]}>
-                        {priorityLabels[assignment.priority]}
-                      </Badge>
-                      <Badge variant="outline" className={statusColors[assignment.status]}>
-                        {statusLabels[assignment.status]}
-                      </Badge>
+                return (
+                  <div
+                    key={assignment.id}
+                    className="flex items-start gap-4 rounded-lg border p-4"
+                  >
+                    <div className={`mt-1 ${statusColors[assignment.status]}`}>
+                      <StatusIcon className="h-5 w-5" />
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      {assignment.description}
-                    </p>
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      <div className="flex items-center gap-1">
-                        <BookOpen className="h-3 w-3" />
-                        <span>{assignment.courseName}</span>
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium">{assignment.title}</h3>
+                        <Badge
+                          variant="outline"
+                          className={priorityColors[assignment.priority]}
+                        >
+                          {priorityLabels[assignment.priority]}
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className={statusColors[assignment.status]}
+                        >
+                          {statusLabels[assignment.status]}
+                        </Badge>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        <span>
-                          截止日期: {assignment.dueDate}
-                          {daysUntilDue > 0 && ` (${daysUntilDue} 天后)`}
-                          {daysUntilDue === 0 && " (今天)"}
-                          {daysUntilDue < 0 && ` (已逾期 ${Math.abs(daysUntilDue)} 天)`}
-                        </span>
+                      {assignment.description && (
+                        <p className="text-sm text-muted-foreground">
+                          {assignment.description}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                        {assignment.courses?.name && (
+                          <div className="flex items-center gap-1">
+                            <BookOpen className="h-3 w-3" />
+                            <span>{assignment.courses.name}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          <span>
+                            截止日期:{" "}
+                            {new Date(assignment.due_date).toLocaleDateString("zh-CN")}
+                            {daysUntilDue > 0 && ` (${daysUntilDue} 天后)`}
+                            {daysUntilDue === 0 && " (今天)"}
+                            {daysUntilDue < 0 &&
+                              ` (已逾期 ${Math.abs(daysUntilDue)} 天)`}
+                          </span>
+                        </div>
                       </div>
                     </div>
+                    <div className="flex gap-2">
+                      {assignment.status === "pending" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            handleStatusChange(assignment.id, "in_progress")
+                          }
+                        >
+                          开始
+                        </Button>
+                      )}
+                      {assignment.status === "in_progress" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            handleStatusChange(assignment.id, "completed")
+                          }
+                        >
+                          完成
+                        </Button>
+                      )}
+                      {assignment.status === "overdue" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            handleStatusChange(assignment.id, "completed")
+                          }
+                        >
+                          补交
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-red-500 hover:bg-red-50 hover:text-red-600"
+                        onClick={() => handleDelete(assignment.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    {assignment.status === "pending" && (
-                      <Button size="sm" variant="outline">
-                        开始
-                      </Button>
-                    )}
-                    {assignment.status === "in_progress" && (
-                      <Button size="sm" variant="outline">
-                        完成
-                      </Button>
-                    )}
-                    {assignment.status === "overdue" && (
-                      <Button size="sm" variant="outline">
-                        补交
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            ) : (
+              <p className="py-8 text-center text-muted-foreground">
+                {filter === "all"
+                  ? "暂无作业，点击'添加作业'开始"
+                  : `没有${statusLabels[filter]}的作业`}
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
+
+      <AssignmentDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        onSubmit={handleCreate}
+      />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,25 +12,30 @@ import {
   Palette,
   Save,
   BookOpen,
+  Loader2,
 } from "lucide-react";
+import { getProfile, updateProfile } from "@/app/actions/profile";
+import { useAuth } from "@/components/providers/auth-provider";
 
 interface UserProfile {
-  fullName: string;
+  full_name: string;
   email: string;
   grade: string;
   major: string;
-  learningGoals: string;
+  learning_goals: string;
 }
 
 export default function SettingsPage() {
+  const { user } = useAuth();
   const [profile, setProfile] = useState<UserProfile>({
-    fullName: "张三",
-    email: "zhangsan@example.com",
-    grade: "大三",
-    major: "计算机科学与技术",
-    learningGoals: "提高编程能力，掌握数据结构和算法",
+    full_name: "",
+    email: "",
+    grade: "",
+    major: "",
+    learning_goals: "",
   });
-
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [notifications, setNotifications] = useState({
     assignmentReminder: true,
     courseReminder: true,
@@ -38,15 +43,51 @@ export default function SettingsPage() {
     emailNotification: false,
   });
 
-  const handleSaveProfile = () => {
-    // TODO: Save profile to database
-    alert("个人资料已保存");
+  useEffect(() => {
+    const loadProfile = async () => {
+      const data = await getProfile();
+      if (data) {
+        setProfile({
+          full_name: data.full_name || "",
+          email: data.email || user?.email || "",
+          grade: data.grade || "",
+          major: data.major || "",
+          learning_goals: data.learning_goals || "",
+        });
+      } else if (user) {
+        setProfile((prev) => ({ ...prev, email: user.email || "" }));
+      }
+      setLoading(false);
+    };
+    loadProfile();
+  }, [user]);
+
+  const handleSaveProfile = async () => {
+    setSaving(true);
+    try {
+      const result = await updateProfile({
+        full_name: profile.full_name,
+        grade: profile.grade,
+        major: profile.major,
+        learning_goals: profile.learning_goals,
+      });
+      if (result.success) {
+        alert("个人资料已保存");
+      } else {
+        alert("保存失败: " + result.error);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleSaveNotifications = () => {
-    // TODO: Save notification settings
-    alert("通知设置已保存");
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -67,26 +108,21 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <label className="text-sm font-medium">姓名</label>
               <Input
-                value={profile.fullName}
+                value={profile.full_name}
                 onChange={(e) =>
-                  setProfile({ ...profile, fullName: e.target.value })
+                  setProfile({ ...profile, full_name: e.target.value })
                 }
                 placeholder="请输入姓名"
               />
             </div>
-
             <div className="space-y-2">
               <label className="text-sm font-medium">邮箱</label>
               <Input
                 value={profile.email}
-                onChange={(e) =>
-                  setProfile({ ...profile, email: e.target.value })
-                }
-                placeholder="请输入邮箱"
-                type="email"
+                disabled
+                className="bg-muted"
               />
             </div>
-
             <div className="space-y-2">
               <label className="text-sm font-medium">年级</label>
               <Input
@@ -94,10 +130,9 @@ export default function SettingsPage() {
                 onChange={(e) =>
                   setProfile({ ...profile, grade: e.target.value })
                 }
-                placeholder="请输入年级"
+                placeholder="例如：大三"
               />
             </div>
-
             <div className="space-y-2">
               <label className="text-sm font-medium">专业</label>
               <Input
@@ -105,23 +140,25 @@ export default function SettingsPage() {
                 onChange={(e) =>
                   setProfile({ ...profile, major: e.target.value })
                 }
-                placeholder="请输入专业"
+                placeholder="例如：计算机科学与技术"
               />
             </div>
-
             <div className="space-y-2">
               <label className="text-sm font-medium">学习目标</label>
               <Input
-                value={profile.learningGoals}
+                value={profile.learning_goals}
                 onChange={(e) =>
-                  setProfile({ ...profile, learningGoals: e.target.value })
+                  setProfile({ ...profile, learning_goals: e.target.value })
                 }
-                placeholder="请输入学习目标"
+                placeholder="例如：提高编程能力"
               />
             </div>
-
-            <Button onClick={handleSaveProfile} className="w-full">
-              <Save className="mr-2 h-4 w-4" />
+            <Button onClick={handleSaveProfile} className="w-full" disabled={saving}>
+              {saving ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
               保存个人资料
             </Button>
           </CardContent>
@@ -136,94 +173,49 @@ export default function SettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">作业提醒</p>
-                  <p className="text-xs text-muted-foreground">
-                    在作业截止前发送提醒
-                  </p>
+              {(
+                [
+                  {
+                    key: "assignmentReminder" as const,
+                    label: "作业提醒",
+                    desc: "在作业截止前发送提醒",
+                  },
+                  {
+                    key: "courseReminder" as const,
+                    label: "课程提醒",
+                    desc: "在课程开始前发送提醒",
+                  },
+                  {
+                    key: "gradeNotification" as const,
+                    label: "成绩通知",
+                    desc: "当有新成绩时发送通知",
+                  },
+                  {
+                    key: "emailNotification" as const,
+                    label: "邮件通知",
+                    desc: "通过邮件接收通知",
+                  },
+                ] as const
+              ).map(({ key, label, desc }) => (
+                <div key={key} className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-muted-foreground">{desc}</p>
+                  </div>
+                  <Button
+                    variant={notifications[key] ? "default" : "outline"}
+                    size="sm"
+                    onClick={() =>
+                      setNotifications({
+                        ...notifications,
+                        [key]: !notifications[key],
+                      })
+                    }
+                  >
+                    {notifications[key] ? "开启" : "关闭"}
+                  </Button>
                 </div>
-                <Button
-                  variant={notifications.assignmentReminder ? "default" : "outline"}
-                  size="sm"
-                  onClick={() =>
-                    setNotifications({
-                      ...notifications,
-                      assignmentReminder: !notifications.assignmentReminder,
-                    })
-                  }
-                >
-                  {notifications.assignmentReminder ? "开启" : "关闭"}
-                </Button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">课程提醒</p>
-                  <p className="text-xs text-muted-foreground">
-                    在课程开始前发送提醒
-                  </p>
-                </div>
-                <Button
-                  variant={notifications.courseReminder ? "default" : "outline"}
-                  size="sm"
-                  onClick={() =>
-                    setNotifications({
-                      ...notifications,
-                      courseReminder: !notifications.courseReminder,
-                    })
-                  }
-                >
-                  {notifications.courseReminder ? "开启" : "关闭"}
-                </Button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">成绩通知</p>
-                  <p className="text-xs text-muted-foreground">
-                    当有新成绩时发送通知
-                  </p>
-                </div>
-                <Button
-                  variant={notifications.gradeNotification ? "default" : "outline"}
-                  size="sm"
-                  onClick={() =>
-                    setNotifications({
-                      ...notifications,
-                      gradeNotification: !notifications.gradeNotification,
-                    })
-                  }
-                >
-                  {notifications.gradeNotification ? "开启" : "关闭"}
-                </Button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">邮件通知</p>
-                  <p className="text-xs text-muted-foreground">
-                    通过邮件接收通知
-                  </p>
-                </div>
-                <Button
-                  variant={notifications.emailNotification ? "default" : "outline"}
-                  size="sm"
-                  onClick={() =>
-                    setNotifications({
-                      ...notifications,
-                      emailNotification: !notifications.emailNotification,
-                    })
-                  }
-                >
-                  {notifications.emailNotification ? "开启" : "关闭"}
-                </Button>
-              </div>
-
-              <Button onClick={handleSaveNotifications} className="w-full">
-                <Save className="mr-2 h-4 w-4" />
-                保存通知设置
-              </Button>
+              ))}
             </CardContent>
           </Card>
 
@@ -238,9 +230,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">主题</p>
-                  <p className="text-xs text-muted-foreground">
-                    选择应用主题
-                  </p>
+                  <p className="text-xs text-muted-foreground">选择应用主题</p>
                 </div>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm">
@@ -254,13 +244,10 @@ export default function SettingsPage() {
                   </Button>
                 </div>
               </div>
-
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">语言</p>
-                  <p className="text-xs text-muted-foreground">
-                    选择应用语言
-                  </p>
+                  <p className="text-xs text-muted-foreground">选择应用语言</p>
                 </div>
                 <Badge variant="outline">中文</Badge>
               </div>
@@ -277,7 +264,7 @@ export default function SettingsPage() {
             <CardContent>
               <div className="space-y-2">
                 <p className="text-sm">
-                  <span className="font-medium">应用名称:</span> AI 学习助手
+                  <span className="font-medium">应用名称:</span> 智学助手
                 </p>
                 <p className="text-sm">
                   <span className="font-medium">版本:</span> 1.0.0

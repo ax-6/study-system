@@ -205,6 +205,29 @@ export interface Database {
           updated_at?: string;
         };
       };
+      chat_messages: {
+        Row: {
+          id: string;
+          user_id: string;
+          role: "user" | "assistant";
+          content: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          role: "user" | "assistant";
+          content: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          role?: "user" | "assistant";
+          content?: string;
+          created_at?: string;
+        };
+      };
     };
   };
 }
@@ -214,3 +237,4 @@ export type Course = Database["public"]["Tables"]["courses"]["Row"];
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 export type Todo = Database["public"]["Tables"]["todos"]["Row"];
 export type Grade = Database["public"]["Tables"]["grades"]["Row"];
+export type ChatMessage = Database["public"]["Tables"]["chat_messages"]["Row"];
