@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -15,6 +16,7 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   signOut: () => Promise<void>;
+  refreshSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -22,6 +24,7 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   signOut: async () => {},
+  refreshSession: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -29,6 +32,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
+
+  const refreshSession = useCallback(async () => {
+    const {
+      data: { session: currentSession },
+    } = await supabase.auth.getSession();
+    setSession(currentSession);
+    setUser(currentSession?.user ?? null);
+  }, [supabase]);
 
   useEffect(() => {
     // 获取初始 session
@@ -70,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         loading,
         signOut: handleSignOut,
+        refreshSession,
       }}
     >
       {children}

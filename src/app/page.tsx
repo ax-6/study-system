@@ -1,14 +1,21 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
-import { getChatHistory } from "@/app/actions/chat";
+import {
+  getConversations,
+  createConversation,
+  deleteConversation,
+  renameConversation,
+  getChatHistory,
+} from "@/app/actions/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConversationSidebar } from "@/components/chat/conversation-sidebar";
 import {
   Send,
   Bot,
@@ -20,6 +27,7 @@ import {
   BarChart3,
   Sparkles,
   ArrowRight,
+  Menu,
 } from "lucide-react";
 
 interface Message {
@@ -27,7 +35,14 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  status?: string; // Agent tool execution status
+  status?: string;
+}
+
+interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
 }
 
 const quickActions = [
@@ -57,18 +72,26 @@ const quickActions = [
   },
 ];
 
+const WELCOME_MESSAGE: Message = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "你好！我是 **智学助手**，你的 AI 学习管理 Agent。🎓\n\n我具备以下能力：\n\n• 📚 **课程管理** — 查询、添加、修改课程安排\n• 📝 **作业管理** — 跟踪作业进度、提醒截止日期\n• 📅 **日程管理** — 管理待办事项、规划学习时间\n• 📊 **成绩分析** — 记录成绩、分析学习趋势\n• 💡 **学习建议** — 基于数据提供个性化建议\n\n你可以直接告诉我你想做什么，或者点击下方的快捷操作开始！",
+  timestamp: new Date(),
+};
+
 export default function Home() {
   const router = useRouter();
-  const { user, loading } = useAuth();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "你好！我是 **智学助手**，你的 AI 学习管理 Agent。🎓\n\n我具备以下能力：\n\n• 📚 **课程管理** — 查询、添加、修改课程安排\n• 📝 **作业管理** — 跟踪作业进度、提醒截止日期\n• 📅 **日程管理** — 管理待办事项、规划学习时间\n• 📊 **成绩分析** — 记录成绩、分析学习趋势\n• 💡 **学习建议** — 基于数据提供个性化建议\n\n你可以直接告诉我你想做什么，或者点击下方的快捷操作开始！",
-      timestamp: new Date(),
-    },
-  ]);
+  const { user, loading, refreshSession } = useAuth();
+
+  // Conversation state
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Messages for the active conversation
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -81,25 +104,88 @@ export default function Home() {
     scrollToBottom();
   }, [messages]);
 
-  // Load chat history when user is authenticated
+  // Fix auth state: refresh session if user is null after loading completes
+  useEffect(() => {
+    if (!loading && !user) {
+      refreshSession();
+    }
+  }, [loading, user, refreshSession]);
+
+  // Load conversations when user is authenticated
+  const loadConversations = useCallback(async () => {
+    if (!user) return;
+    const convs = await getConversations();
+    setConversations(convs);
+  }, [user]);
+
   useEffect(() => {
     if (!user || loading) return;
+    loadConversations();
+  }, [user, loading, loadConversations]);
+
+  // Load messages when active conversation changes
+  useEffect(() => {
+    if (!activeConversationId || !user) {
+      setMessages([WELCOME_MESSAGE]);
+      return;
+    }
+
     let cancelled = false;
-    getChatHistory(100).then((history) => {
-      if (cancelled || !history || history.length === 0) return;
+    getChatHistory(activeConversationId).then((history) => {
+      if (cancelled || !history || history.length === 0) {
+        if (!cancelled) setMessages([WELCOME_MESSAGE]);
+        return;
+      }
       const loadedMessages: Message[] = history.map((msg) => ({
         id: msg.id,
         role: msg.role as "user" | "assistant",
         content: msg.content,
         timestamp: new Date(msg.created_at),
       }));
-      setMessages(loadedMessages);
+      if (!cancelled) setMessages(loadedMessages);
     });
+
     return () => {
       cancelled = true;
     };
-  }, [user, loading]);
+  }, [activeConversationId, user]);
 
+  // Create a new conversation
+  const handleNewConversation = async () => {
+    setActiveConversationId(null);
+    setMessages([WELCOME_MESSAGE]);
+    setMobileSidebarOpen(false);
+  };
+
+  // Select an existing conversation
+  const handleSelectConversation = (id: string) => {
+    setActiveConversationId(id);
+    setMobileSidebarOpen(false);
+  };
+
+  // Delete a conversation
+  const handleDeleteConversation = async (id: string) => {
+    const success = await deleteConversation(id);
+    if (success) {
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (activeConversationId === id) {
+        setActiveConversationId(null);
+        setMessages([WELCOME_MESSAGE]);
+      }
+    }
+  };
+
+  // Rename a conversation
+  const handleRenameConversation = async (id: string, title: string) => {
+    const success = await renameConversation(id, title);
+    if (success) {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title } : c))
+      );
+    }
+  };
+
+  // Send a message
   const handleSendMessage = async (text?: string) => {
     const messageText = text || input.trim();
     if (!messageText || isLoading) return;
@@ -116,7 +202,11 @@ export default function Home() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => {
+      // Remove welcome message if it's still there
+      const filtered = prev.filter((m) => m.id !== "welcome");
+      return [...filtered, userMessage];
+    });
     setInput("");
     setIsLoading(true);
 
@@ -125,10 +215,13 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...messages, userMessage].map((msg) => ({
-            role: msg.role,
-            content: msg.content,
-          })),
+          messages: [...messages.filter((m) => m.id !== "welcome"), userMessage].map(
+            (msg) => ({
+              role: msg.role,
+              content: msg.content,
+            })
+          ),
+          conversationId: activeConversationId,
         }),
       });
 
@@ -148,29 +241,71 @@ export default function Home() {
 
       setMessages((prev) => [...prev, assistantMessage]);
 
+      // Buffer-based SSE parsing for correct chunk boundary handling
+      let buffer = "";
+      let newConversationId: string | null = null;
+
       while (true) {
         const { done, value } = await reader!.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            if (data === "[DONE]") continue;
+        // Split by double newline (SSE event delimiter)
+        const events = buffer.split("\n\n");
+        // Keep the last incomplete event in the buffer
+        buffer = events.pop() || "";
+
+        for (const event of events) {
+          // Find the data line in this event
+          const dataLine = event
+            .split("\n")
+            .find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+
+          const data = dataLine.slice(6);
+          if (data === "[DONE]") continue;
+
+          try {
+            const parsed = JSON.parse(data);
+
+            if (parsed.type === "status" && parsed.message) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessage.id
+                    ? { ...msg, status: parsed.message }
+                    : msg
+                )
+              );
+            } else if (parsed.type === "text-delta" && parsed.delta) {
+              assistantContent += parsed.delta;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessage.id
+                    ? { ...msg, content: assistantContent, status: undefined }
+                    : msg
+                )
+              );
+            } else if (parsed.type === "done" && parsed.conversationId) {
+              newConversationId = parsed.conversationId;
+            }
+          } catch {
+            // Ignore parsing errors
+          }
+        }
+      }
+
+      // Process any remaining buffer
+      if (buffer.trim()) {
+        const dataLine = buffer
+          .split("\n")
+          .find((line) => line.startsWith("data: "));
+        if (dataLine) {
+          const data = dataLine.slice(6);
+          if (data !== "[DONE]") {
             try {
               const parsed = JSON.parse(data);
-              if (parsed.type === "status" && parsed.message) {
-                // Update the status indicator on the assistant message
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessage.id
-                      ? { ...msg, status: parsed.message }
-                      : msg
-                  )
-                );
-              } else if (parsed.type === "text-delta" && parsed.delta) {
+              if (parsed.type === "text-delta" && parsed.delta) {
                 assistantContent += parsed.delta;
                 setMessages((prev) =>
                   prev.map((msg) =>
@@ -180,11 +315,23 @@ export default function Home() {
                   )
                 );
               }
+              if (parsed.type === "done" && parsed.conversationId) {
+                newConversationId = parsed.conversationId;
+              }
             } catch {
-              // Ignore parsing errors
+              // Ignore
             }
           }
         }
+      }
+
+      // If a new conversation was created, update state and reload conversation list
+      if (newConversationId && !activeConversationId) {
+        setActiveConversationId(newConversationId);
+        loadConversations();
+      } else if (activeConversationId) {
+        // Update the conversation's updated_at in the local list
+        loadConversations();
       }
     } catch (error) {
       console.error("Error sending message:", error);
@@ -218,171 +365,223 @@ export default function Home() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-background">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b px-6 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-            <Sparkles className="h-5 w-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold">智学助手</h1>
-            <p className="text-xs text-muted-foreground">AI Agent 智能学习管理</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {user ? (
-            <Button variant="outline" onClick={() => router.push("/dashboard")}>
-              进入仪表板
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          ) : (
-            <>
-              <Button variant="outline" onClick={() => router.push("/login")}>
-                登录
-              </Button>
-              <Button onClick={() => router.push("/register")}>注册</Button>
-            </>
-          )}
-        </div>
-      </header>
+    <div className="flex h-screen bg-background">
+      {/* Mobile sidebar overlay */}
+      {mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
 
-      {/* Chat Area */}
-      <div className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full">
-          <div className="mx-auto max-w-3xl space-y-4 p-4 pb-20">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex gap-3 ${
-                  message.role === "user" ? "justify-end" : "justify-start"
-                }`}
-              >
-                {message.role === "assistant" && (
+      {/* Sidebar - desktop */}
+      <div className="hidden md:block">
+        <ConversationSidebar
+          conversations={conversations}
+          activeId={activeConversationId}
+          onSelect={handleSelectConversation}
+          onCreate={handleNewConversation}
+          onDelete={handleDeleteConversation}
+          onRename={handleRenameConversation}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
+      </div>
+
+      {/* Sidebar - mobile */}
+      <div
+        className={`fixed inset-y-0 left-0 z-50 transition-transform md:hidden ${
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <ConversationSidebar
+          conversations={conversations}
+          activeId={activeConversationId}
+          onSelect={handleSelectConversation}
+          onCreate={handleNewConversation}
+          onDelete={handleDeleteConversation}
+          onRename={handleRenameConversation}
+          collapsed={false}
+          onToggleCollapse={() => setMobileSidebarOpen(false)}
+        />
+      </div>
+
+      {/* Main chat area */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Header */}
+        <header className="flex items-center justify-between border-b px-4 py-3 md:px-6">
+          <div className="flex items-center gap-3">
+            {/* Mobile menu button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              onClick={() => setMobileSidebarOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Sparkles className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold">智学助手</h1>
+              <p className="text-xs text-muted-foreground">AI Agent 智能学习管理</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {user ? (
+              <Button variant="outline" onClick={() => router.push("/dashboard")}>
+                进入仪表板
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => router.push("/login")}>
+                  登录
+                </Button>
+                <Button onClick={() => router.push("/register")}>注册</Button>
+              </>
+            )}
+          </div>
+        </header>
+
+        {/* Chat Area */}
+        <div className="flex-1 overflow-hidden">
+          <ScrollArea className="h-full">
+            <div className="mx-auto max-w-3xl space-y-4 p-4 pb-20">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex gap-3 ${
+                    message.role === "user" ? "justify-end" : "justify-start"
+                  }`}
+                >
+                  {message.role === "assistant" && (
+                    <Avatar className="h-8 w-8 shrink-0">
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        <Bot className="h-4 w-4" />
+                      </AvatarFallback>
+                    </Avatar>
+                  )}
+                  <div
+                    className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                    }`}
+                  >
+                    {/* Status indicator during tool execution */}
+                    {message.status && !message.content && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>{message.status}</span>
+                      </div>
+                    )}
+                    {/* Message content */}
+                    {message.content ? (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                        {message.content.split(/(\*\*.*?\*\*)/).map((part, i) => {
+                          if (part.startsWith("**") && part.endsWith("**")) {
+                            return (
+                              <strong key={i}>{part.slice(2, -2)}</strong>
+                            );
+                          }
+                          return <span key={i}>{part}</span>;
+                        })}
+                      </div>
+                    ) : !message.status ? (
+                      <div className="text-sm text-muted-foreground">...</div>
+                    ) : null}
+                    <p className="mt-1.5 text-xs opacity-60">
+                      {message.timestamp.toLocaleTimeString("zh-CN", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                  {message.role === "user" && (
+                    <Avatar className="h-8 w-8 shrink-0">
+                      <AvatarFallback className="bg-secondary">
+                        <User className="h-4 w-4" />
+                      </AvatarFallback>
+                    </Avatar>
+                  )}
+                </div>
+              ))}
+              {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
+                <div className="flex gap-3">
                   <Avatar className="h-8 w-8 shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground">
                       <Bot className="h-4 w-4" />
                     </AvatarFallback>
                   </Avatar>
-                )}
-                <div
-                  className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
-                    message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
-                  }`}
-                >
-                  {/* Status indicator during tool execution */}
-                  {message.status && !message.content && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>{message.status}</span>
-                    </div>
-                  )}
-                  {/* Message content */}
-                  {message.content ? (
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {message.content.split(/(\*\*.*?\*\*)/).map((part, i) => {
-                        if (part.startsWith("**") && part.endsWith("**")) {
-                          return (
-                            <strong key={i}>{part.slice(2, -2)}</strong>
-                          );
-                        }
-                        return <span key={i}>{part}</span>;
-                      })}
-                    </div>
-                  ) : !message.status ? (
-                    <div className="text-sm text-muted-foreground">...</div>
-                  ) : null}
-                  <p className="mt-1.5 text-xs opacity-60">
-                    {message.timestamp.toLocaleTimeString("zh-CN", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
+                  <div className="rounded-lg bg-muted px-4 py-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
                 </div>
-                {message.role === "user" && (
-                  <Avatar className="h-8 w-8 shrink-0">
-                    <AvatarFallback className="bg-secondary">
-                      <User className="h-4 w-4" />
-                    </AvatarFallback>
-                  </Avatar>
-                )}
-              </div>
-            ))}
-            {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
-              <div className="flex gap-3">
-                <Avatar className="h-8 w-8 shrink-0">
-                  <AvatarFallback className="bg-primary text-primary-foreground">
-                    <Bot className="h-4 w-4" />
-                  </AvatarFallback>
-                </Avatar>
-                <div className="rounded-lg bg-muted px-4 py-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        </ScrollArea>
-      </div>
-
-      {/* Quick Actions + Input */}
-      <div className="border-t bg-background">
-        {/* Quick Actions - only show when conversation is short */}
-        {messages.length <= 1 && (
-          <div className="mx-auto max-w-3xl px-4 pt-4">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {quickActions.map((action) => (
-                <Card
-                  key={action.label}
-                  className="cursor-pointer transition-colors hover:bg-muted/50"
-                  onClick={() => handleSendMessage(action.prompt)}
-                >
-                  <CardContent className="flex items-center gap-2 p-3">
-                    <div
-                      className={`flex h-8 w-8 items-center justify-center rounded-md ${action.color}`}
-                    >
-                      <action.icon className="h-4 w-4" />
-                    </div>
-                    <span className="text-sm font-medium">{action.label}</span>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Input Bar */}
-        <div className="mx-auto max-w-3xl p-4">
-          <div className="flex gap-2">
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={
-                user
-                  ? "告诉我你想做什么... 例如：帮我添加一门高等数学课"
-                  : "登录后即可使用 AI 助手..."
-              }
-              disabled={isLoading}
-              className="flex-1"
-            />
-            <Button
-              onClick={() => handleSendMessage()}
-              disabled={!input.trim() || isLoading}
-              size="icon"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
               )}
-            </Button>
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+        </div>
+
+        {/* Quick Actions + Input */}
+        <div className="border-t bg-background">
+          {/* Quick Actions - only show when conversation is short */}
+          {messages.length <= 1 && (
+            <div className="mx-auto max-w-3xl px-4 pt-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {quickActions.map((action) => (
+                  <Card
+                    key={action.label}
+                    className="cursor-pointer transition-colors hover:bg-muted/50"
+                    onClick={() => handleSendMessage(action.prompt)}
+                  >
+                    <CardContent className="flex items-center gap-2 p-3">
+                      <div
+                        className={`flex h-8 w-8 items-center justify-center rounded-md ${action.color}`}
+                      >
+                        <action.icon className="h-4 w-4" />
+                      </div>
+                      <span className="text-sm font-medium">{action.label}</span>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Input Bar */}
+          <div className="mx-auto max-w-3xl p-4">
+            <div className="flex gap-2">
+              <Input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyPress}
+                placeholder={
+                  user
+                    ? "告诉我你想做什么... 例如：帮我添加一门高等数学课"
+                    : "登录后即可使用 AI 助手..."
+                }
+                disabled={isLoading}
+                className="flex-1"
+              />
+              <Button
+                onClick={() => handleSendMessage()}
+                disabled={!input.trim() || isLoading}
+                size="icon"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="mt-2 text-center text-xs text-muted-foreground">
+              智学助手由 AI Agent 驱动，具备感知、规划与执行能力
+            </p>
           </div>
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            智学助手由 AI Agent 驱动，具备感知、规划与执行能力
-          </p>
         </div>
       </div>
     </div>

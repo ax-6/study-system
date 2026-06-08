@@ -488,16 +488,44 @@ export async function POST(req: Request) {
   await ensureProfile(supabase, userId, email);
 
   const body = await req.json();
-  const { messages } = body as {
+  const { messages, conversationId: inputConversationId } = body as {
     messages: Array<{ role: string; content: string }>;
+    conversationId?: string;
   };
+
+  // Resolve conversation ID: use provided one or create a new conversation
+  let conversationId = inputConversationId;
+  if (!conversationId) {
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    const title = firstUserMsg
+      ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? "..." : "")
+      : "新对话";
+    const { data: conv, error: convError } = await supabase
+      .from("conversations")
+      .insert({ user_id: userId, title })
+      .select("id")
+      .single();
+    if (convError) {
+      console.error("Failed to create conversation:", convError.message);
+      return new Response(JSON.stringify({ error: "创建对话失败" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    conversationId = conv.id;
+  }
 
   // Save the latest user message to DB
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   if (lastUserMsg) {
     await supabase
       .from("chat_messages")
-      .insert({ user_id: userId, role: "user", content: lastUserMsg.content });
+      .insert({
+        user_id: userId,
+        role: "user",
+        content: lastUserMsg.content,
+        conversation_id: conversationId,
+      });
   }
 
   // Build OpenAI-format messages
@@ -579,11 +607,16 @@ export async function POST(req: Request) {
           // Save to DB
           await supabase
             .from("chat_messages")
-            .insert({ user_id: userId, role: "assistant", content: finalAssistantText });
+            .insert({
+              user_id: userId,
+              role: "assistant",
+              content: finalAssistantText,
+              conversation_id: conversationId,
+            });
 
           // Stream as a single chunk
           sseEvent(controller, { type: "text-delta", delta: finalAssistantText });
-          sseEvent(controller, "[DONE]");
+          sseEvent(controller, { type: "done", conversationId });
           controller.close();
           return;
         }
@@ -603,15 +636,20 @@ export async function POST(req: Request) {
             sseEvent(controller, { type: "text-delta", delta });
           }
         }
-        sseEvent(controller, "[DONE]");
 
         // Save assistant message to DB after stream completes
         if (assistantText) {
           await supabase
             .from("chat_messages")
-            .insert({ user_id: userId, role: "assistant", content: assistantText });
+            .insert({
+              user_id: userId,
+              role: "assistant",
+              content: assistantText,
+              conversation_id: conversationId,
+            });
         }
 
+        sseEvent(controller, { type: "done", conversationId });
         controller.close();
       } catch (err) {
         console.error("Stream error:", err);
@@ -619,7 +657,7 @@ export async function POST(req: Request) {
           type: "text-delta",
           delta: "抱歉，处理请求时出现错误。",
         });
-        sseEvent(controller, "[DONE]");
+        sseEvent(controller, { type: "done", conversationId });
         controller.close();
       }
     },
@@ -628,8 +666,9 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }
