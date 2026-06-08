@@ -28,6 +28,7 @@ import {
   Menu,
 } from "lucide-react";
 import { ChatInput } from "@/components/chat/chat-input";
+import { TypingLoader } from "@/components/chat/typing-loader";
 
 interface Message {
   id: string;
@@ -376,8 +377,9 @@ export default function Home() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <TypingLoader showIcon={false} className="text-base" />
       </div>
     );
   }
@@ -490,10 +492,7 @@ export default function Home() {
                   >
                     {/* Status indicator during tool execution */}
                     {message.status && !message.content && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <span>{message.status}</span>
-                      </div>
+                      <TypingLoader />
                     )}
                     {/* Message content */}
                     {message.content ? (
@@ -534,7 +533,7 @@ export default function Home() {
                     </AvatarFallback>
                   </Avatar>
                   <div className="rounded-lg bg-muted px-4 py-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <TypingLoader showIcon={true} />
                   </div>
                 </div>
               )}
