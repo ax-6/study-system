@@ -26,7 +26,7 @@ interface SidebarProps {
 }
 
 const mainTabs = [
-  { id: "agent", label: "AI Agent", icon: Sparkles, isHome: true },
+  { id: "agent", label: "智慧学习AI Agent", icon: Sparkles, isHome: true },
 ];
 
 const tabs = [
@@ -61,7 +61,7 @@ export function Sidebar({ activeTab = "courses", onTabChange, children }: Sideba
         {!collapsed && (
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-semibold">智学助手</h2>
+            <h2 className="text-lg font-semibold">智慧学习AI Agent</h2>
           </div>
         )}
         <Button

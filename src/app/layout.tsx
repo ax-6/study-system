@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI 学习助手",
+  title: "智慧学习AI Agent",
   description: "基于 AI Agent 的智能学习助手系统",
 };
 

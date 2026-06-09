@@ -14,7 +14,7 @@ export default function AuthLayout({
         className="mb-8 flex items-center gap-2 text-2xl font-bold text-gray-900"
       >
         <BookOpen className="h-8 w-8 text-blue-600" />
-        <span>AI 学习助手</span>
+        <span>智慧学习AI Agent</span>
       </Link>
 
       {/* Card */}

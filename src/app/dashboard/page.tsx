@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { BookOpen, FileText, Calendar, BarChart3, Bot, ArrowRight } from "lucide-react";
+import { BookOpen, FileText, Calendar, BarChart3, Bot, ArrowRight, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { getDashboardStats } from "@/app/actions/profile";
 import { getCourses } from "@/app/actions/courses";
@@ -82,7 +82,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
@@ -92,11 +92,11 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">欢迎回来</h1>
-          <p className="text-muted-foreground">这是你的学习助手仪表板</p>
+          <p className="text-muted-foreground">这是你的智慧学习AI Agent仪表板</p>
         </div>
         <Button onClick={() => router.push("/")} className="gap-2">
           <Bot className="h-4 w-4" />
-          打开 AI 助手
+          打开 智慧学习AI Agent
         </Button>
       </div>
 
@@ -263,9 +263,9 @@ export default function DashboardPage() {
             <Bot className="h-6 w-6 text-primary" />
           </div>
           <div className="flex-1">
-            <h3 className="font-semibold">需要帮助？试试 AI 助手</h3>
+            <h3 className="font-semibold">需要帮助？试试 智慧学习AI Agent</h3>
             <p className="text-sm text-muted-foreground">
-              智学助手可以帮你管理课程、跟踪作业、分析成绩，直接用自然语言对话即可
+              智慧学习AI Agent可以帮你管理课程、跟踪作业、分析成绩，直接用自然语言对话即可
             </p>
           </div>
           <ArrowRight className="h-5 w-5 text-muted-foreground" />

@@ -3,6 +3,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Bot, User } from "lucide-react";
+import { MarkdownRenderer } from "./markdown-renderer";
 
 export interface Message {
   id: string;
@@ -44,10 +45,14 @@ export function ChatMessage({ message }: ChatMessageProps) {
       </Avatar>
       <div className="flex-1 space-y-1">
         <p className="text-sm font-medium">
-          {isAssistant ? "AI 学习助手" : "你"}
+          {isAssistant ? "智慧学习AI Agent" : "你"}
         </p>
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-          {message.content}
+        <div className="text-sm leading-relaxed">
+          {isAssistant ? (
+            <MarkdownRenderer content={message.content} />
+          ) : (
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          )}
         </div>
       </div>
     </div>

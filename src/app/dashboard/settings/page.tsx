@@ -264,7 +264,7 @@ export default function SettingsPage() {
             <CardContent>
               <div className="space-y-2">
                 <p className="text-sm">
-                  <span className="font-medium">应用名称:</span> 智学助手
+                  <span className="font-medium">应用名称:</span> 智慧学习AI Agent
                 </p>
                 <p className="text-sm">
                   <span className="font-medium">版本:</span> 1.0.0

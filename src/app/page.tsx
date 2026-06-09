@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type UIMessage } from "ai";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   getConversations,
@@ -28,15 +30,9 @@ import {
   Menu,
 } from "lucide-react";
 import { ChatInput } from "@/components/chat/chat-input";
+import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
 import { TypingLoader } from "@/components/chat/typing-loader";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-  status?: string;
-}
+import { ToolInvocation } from "@/components/chat/tool-invocation";
 
 interface Conversation {
   id: string;
@@ -72,12 +68,15 @@ const quickActions = [
   },
 ];
 
-const WELCOME_MESSAGE: Message = {
+const WELCOME_MESSAGE: UIMessage = {
   id: "welcome",
   role: "assistant",
-  content:
-    "你好！我是 **智学助手**，你的 AI 学习管理 Agent。🎓\n\n我具备以下能力：\n\n• 📚 **课程管理** — 查询、添加、修改课程安排\n• 📝 **作业管理** — 跟踪作业进度、提醒截止日期\n• 📅 **日程管理** — 管理待办事项、规划学习时间\n• 📊 **成绩分析** — 记录成绩、分析学习趋势\n• 💡 **学习建议** — 基于数据提供个性化建议\n\n你可以直接告诉我你想做什么，或者点击下方的快捷操作开始！",
-  timestamp: new Date(),
+  parts: [
+    {
+      type: "text",
+      text: "你好！我是 **智慧学习AI Agent**，你的 AI 学习管理助手。🎓\n\n我具备以下能力：\n\n• 📚 **课程管理** — 查询、添加、修改课程安排\n• 📝 **作业管理** — 跟踪作业进度、提醒截止日期\n• 📅 **日程管理** — 管理待办事项、规划学习时间\n• 📊 **成绩分析** — 记录成绩、分析学习趋势\n• 💡 **学习建议** — 基于数据提供个性化建议\n\n你可以直接告诉我你想做什么，或者点击下方的快捷操作开始！",
+    },
+  ],
 };
 
 export default function Home() {
@@ -89,10 +88,33 @@ export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const conversationIdRef = useRef<string | null>(null);
 
-  // Messages for the active conversation
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
-  const [isLoading, setIsLoading] = useState(false);
+  // useChat hook — the core streaming chat state
+  const {
+    messages,
+    setMessages,
+    sendMessage,
+    status,
+    stop,
+  } = useChat({
+    transport: new DefaultChatTransport({
+      api: "/api/chat",
+      body: () => ({
+        conversationId: conversationIdRef.current,
+      }),
+    }),
+    onFinish: ({ message }) => {
+      // Check if the server created a new conversation (look for conversationId in response)
+      // The server sets conversationId, we need to capture it
+      // We'll handle this by checking after the stream completes
+    },
+    onError: (error) => {
+      console.error("Chat error:", error);
+    },
+  });
+
+  const isLoading = status === "submitted" || status === "streaming";
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -101,16 +123,16 @@ export default function Home() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, status]);
 
-  // Fix auth state: refresh session if user is null after loading completes
+  // Fix auth state
   useEffect(() => {
     if (!loading && !user) {
       refreshSession();
     }
   }, [loading, user, refreshSession]);
 
-  // Load conversations when user is authenticated
+  // Load conversations
   const loadConversations = useCallback(async () => {
     if (!user) return;
     const convs = await getConversations();
@@ -126,8 +148,11 @@ export default function Home() {
   useEffect(() => {
     if (!activeConversationId || !user) {
       setMessages([WELCOME_MESSAGE]);
+      conversationIdRef.current = null;
       return;
     }
+
+    conversationIdRef.current = activeConversationId;
 
     let cancelled = false;
     getChatHistory(activeConversationId).then((history) => {
@@ -135,11 +160,10 @@ export default function Home() {
         if (!cancelled) setMessages([WELCOME_MESSAGE]);
         return;
       }
-      const loadedMessages: Message[] = history.map((msg) => ({
+      const loadedMessages: UIMessage[] = history.map((msg) => ({
         id: msg.id,
         role: msg.role as "user" | "assistant",
-        content: msg.content,
-        timestamp: new Date(msg.created_at),
+        parts: [{ type: "text" as const, text: msg.content }],
       }));
       if (!cancelled) setMessages(loadedMessages);
     });
@@ -147,11 +171,12 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId, user]);
+  }, [activeConversationId, user, setMessages]);
 
   // Create a new conversation
-  const handleNewConversation = async () => {
+  const handleNewConversation = () => {
     setActiveConversationId(null);
+    conversationIdRef.current = null;
     setMessages([WELCOME_MESSAGE]);
     setMobileSidebarOpen(false);
   };
@@ -159,6 +184,7 @@ export default function Home() {
   // Select an existing conversation
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
+    conversationIdRef.current = id;
     setMobileSidebarOpen(false);
   };
 
@@ -168,8 +194,7 @@ export default function Home() {
     if (success) {
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (activeConversationId === id) {
-        setActiveConversationId(null);
-        setMessages([WELCOME_MESSAGE]);
+        handleNewConversation();
       }
     }
   };
@@ -194,185 +219,57 @@ export default function Home() {
       return;
     }
 
-    const fileNames = files && files.length > 0
-      ? `\n📎 ${files.map((f) => f.name).join(", ")}`
-      : "";
-    const displayContent = messageText + fileNames;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: displayContent,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => {
-      const filtered = prev.filter((m) => m.id !== "welcome");
-      return [...filtered, userMessage];
-    });
-    setIsLoading(true);
-
-    try {
-      // Use FormData when files are attached, JSON otherwise
-      let requestBody: FormData | string;
-      const headers: Record<string, string> = {};
-
-      if (files && files.length > 0) {
-        const formData = new FormData();
-        formData.append(
-          "messages",
-          JSON.stringify(
-            [...messages.filter((m) => m.id !== "welcome"), userMessage].map(
-              (msg) => ({ role: msg.role, content: msg.content })
-            )
+    // Convert File[] to FileUIPart[] for the AI SDK
+    const fileParts = files?.length
+      ? await Promise.all(
+          files.map(
+            (file) =>
+              new Promise<{
+                type: "file";
+                mediaType: string;
+                filename: string;
+                url: string;
+              }>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  resolve({
+                    type: "file" as const,
+                    mediaType: file.type,
+                    filename: file.name,
+                    url: reader.result as string,
+                  });
+                };
+                reader.readAsDataURL(file);
+              })
           )
-        );
-        if (activeConversationId) {
-          formData.append("conversationId", activeConversationId);
-        }
-        for (const file of files) {
-          formData.append("files", file);
-        }
-        requestBody = formData;
-        // Don't set Content-Type — browser will set multipart boundary
-      } else {
-        headers["Content-Type"] = "application/json";
-        requestBody = JSON.stringify({
-          messages: [...messages.filter((m) => m.id !== "welcome"), userMessage].map(
-            (msg) => ({ role: msg.role, content: msg.content })
-          ),
-          conversationId: activeConversationId,
-        });
-      }
+        )
+      : undefined;
 
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers,
-        body: requestBody,
-      });
-
-      if (!response.ok) throw new Error("Failed to fetch response");
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = "";
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-        status: "正在思考...",
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      // Buffer-based SSE parsing for correct chunk boundary handling
-      let buffer = "";
-      let newConversationId: string | null = null;
-
-      while (true) {
-        const { done, value } = await reader!.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Split by double newline (SSE event delimiter)
-        const events = buffer.split("\n\n");
-        // Keep the last incomplete event in the buffer
-        buffer = events.pop() || "";
-
-        for (const event of events) {
-          // Find the data line in this event
-          const dataLine = event
-            .split("\n")
-            .find((line) => line.startsWith("data: "));
-          if (!dataLine) continue;
-
-          const data = dataLine.slice(6);
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-
-            if (parsed.type === "status" && parsed.message) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessage.id
-                    ? { ...msg, status: parsed.message }
-                    : msg
-                )
-              );
-            } else if (parsed.type === "text-delta" && parsed.delta) {
-              assistantContent += parsed.delta;
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessage.id
-                    ? { ...msg, content: assistantContent, status: undefined }
-                    : msg
-                )
-              );
-            } else if (parsed.type === "done" && parsed.conversationId) {
-              newConversationId = parsed.conversationId;
-            }
-          } catch {
-            // Ignore parsing errors
-          }
-        }
-      }
-
-      // Process any remaining buffer
-      if (buffer.trim()) {
-        const dataLine = buffer
-          .split("\n")
-          .find((line) => line.startsWith("data: "));
-        if (dataLine) {
-          const data = dataLine.slice(6);
-          if (data !== "[DONE]") {
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.type === "text-delta" && parsed.delta) {
-                assistantContent += parsed.delta;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessage.id
-                      ? { ...msg, content: assistantContent, status: undefined }
-                      : msg
-                  )
-                );
-              }
-              if (parsed.type === "done" && parsed.conversationId) {
-                newConversationId = parsed.conversationId;
-              }
-            } catch {
-              // Ignore
-            }
-          }
-        }
-      }
-
-      // If a new conversation was created, update state and reload conversation list
-      if (newConversationId && !activeConversationId) {
-        setActiveConversationId(newConversationId);
-        loadConversations();
-      } else if (activeConversationId) {
-        // Update the conversation's updated_at in the local list
-        loadConversations();
-      }
-    } catch (error) {
-      console.error("Error sending message:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: "抱歉，发生了错误。请稍后再试。",
-          timestamp: new Date(),
+    // Use sendMessage from useChat
+    sendMessage(
+      { text: messageText || "请分析这些文件", files: fileParts },
+      {
+        body: {
+          conversationId: conversationIdRef.current,
         },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+      }
+    );
+
+    // After sending, reload conversations to pick up new ones
+    setTimeout(() => {
+      loadConversations().then(() => {
+        // If we didn't have an active conversation, check for the new one
+        if (!activeConversationId) {
+          getConversations().then((convs) => {
+            if (convs.length > 0) {
+              const newest = convs[0]; // sorted by updated_at
+              setActiveConversationId(newest.id);
+              conversationIdRef.current = newest.id;
+            }
+          });
+        }
+      });
+    }, 2000);
   };
 
   if (loading) {
@@ -431,7 +328,6 @@ export default function Home() {
         {/* Header */}
         <header className="flex items-center justify-between border-b px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
-            {/* Mobile menu button */}
             <Button
               variant="ghost"
               size="icon"
@@ -444,8 +340,12 @@ export default function Home() {
               <Sparkles className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-lg font-semibold">智学助手</h1>
-              <p className="text-xs text-muted-foreground">AI Agent 智能学习管理</p>
+              <h1 className="text-lg font-semibold">智慧学习AI Agent</h1>
+              <p className="text-xs text-muted-foreground">
+                AI Agent 智能学习管理
+                {status === "streaming" && " · 生成中..."}
+                {status === "submitted" && " · 提交中..."}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -470,61 +370,9 @@ export default function Home() {
           <ScrollArea className="h-full">
             <div className="mx-auto max-w-3xl space-y-4 p-4 pb-20">
               {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex gap-3 ${
-                    message.role === "user" ? "justify-end" : "justify-start"
-                  }`}
-                >
-                  {message.role === "assistant" && (
-                    <Avatar className="h-8 w-8 shrink-0">
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        <Bot className="h-4 w-4" />
-                      </AvatarFallback>
-                    </Avatar>
-                  )}
-                  <div
-                    className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
-                    }`}
-                  >
-                    {/* Status indicator during tool execution */}
-                    {message.status && !message.content && (
-                      <TypingLoader />
-                    )}
-                    {/* Message content */}
-                    {message.content ? (
-                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {message.content.split(/(\*\*.*?\*\*)/).map((part, i) => {
-                          if (part.startsWith("**") && part.endsWith("**")) {
-                            return (
-                              <strong key={i}>{part.slice(2, -2)}</strong>
-                            );
-                          }
-                          return <span key={i}>{part}</span>;
-                        })}
-                      </div>
-                    ) : !message.status ? (
-                      <div className="text-sm text-muted-foreground">...</div>
-                    ) : null}
-                    <p className="mt-1.5 text-xs opacity-60">
-                      {message.timestamp.toLocaleTimeString("zh-CN", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  </div>
-                  {message.role === "user" && (
-                    <Avatar className="h-8 w-8 shrink-0">
-                      <AvatarFallback className="bg-secondary">
-                        <User className="h-4 w-4" />
-                      </AvatarFallback>
-                    </Avatar>
-                  )}
-                </div>
+                <MessageBubble key={message.id} message={message} />
               ))}
+
               {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
                 <div className="flex gap-3">
                   <Avatar className="h-8 w-8 shrink-0">
@@ -544,7 +392,6 @@ export default function Home() {
 
         {/* Quick Actions + Input */}
         <div className="border-t bg-background">
-          {/* Quick Actions - only show when conversation is short */}
           {messages.length <= 1 && (
             <div className="mx-auto max-w-3xl px-4 pt-4">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -568,7 +415,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* Input Bar */}
           <div className="mx-auto max-w-3xl">
             <ChatInput
               onSendMessage={handleSendMessage}
@@ -576,16 +422,108 @@ export default function Home() {
               placeholder={
                 user
                   ? "告诉我你想做什么... 支持上传文件 📎"
-                  : "登录后即可使用 AI 助手..."
+                  : "登录后即可使用 智慧学习AI Agent..."
               }
               disabled={!user}
             />
             <p className="pb-2 text-center text-xs text-muted-foreground">
-              智学助手由 AI Agent 驱动 · 支持上传图片/PDF/文档/表格
+              智慧学习AI Agent 驱动 · 支持上传图片/PDF/文档/表格
             </p>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Message Bubble Component ──
+function MessageBubble({ message }: { message: UIMessage }) {
+  const isAssistant = message.role === "assistant";
+  const isUser = message.role === "user";
+
+  // Extract text content from parts
+  const textParts = message.parts?.filter((p) => p.type === "text") || [];
+  const textContent = textParts.map((p) => ("text" in p ? p.text : "")).join("");
+
+  // Extract tool parts (type starts with "tool-")
+  const toolParts =
+    message.parts?.filter((p) => p.type.startsWith("tool-")) || [];
+
+  return (
+    <div
+      className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}
+    >
+      {isAssistant && (
+        <Avatar className="h-8 w-8 shrink-0">
+          <AvatarFallback className="bg-primary text-primary-foreground">
+            <Bot className="h-4 w-4" />
+          </AvatarFallback>
+        </Avatar>
+      )}
+      <div
+        className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
+          isUser ? "bg-primary text-primary-foreground" : "bg-muted"
+        }`}
+      >
+        {/* Tool invocations */}
+        {toolParts.length > 0 && (
+          <div className="mb-2">
+            {toolParts.map((part, idx) => {
+              // part.type is "tool-{toolName}"
+              const toolName = part.type.replace("tool-", "");
+              const state = "state" in part ? part.state : "input-available";
+              const input = "input" in part ? part.input : undefined;
+              const output = "output" in part ? part.output : undefined;
+
+              // Map AI SDK states to our component states
+              const mappedState =
+                state === "output-available" || state === "output-error"
+                  ? "result"
+                  : state === "input-streaming"
+                    ? "partial-call"
+                    : "call";
+
+              return (
+                <ToolInvocation
+                  key={idx}
+                  toolName={toolName}
+                  args={(input as Record<string, unknown>) || {}}
+                  state={mappedState}
+                  result={output}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {/* Text content */}
+        {textContent ? (
+          <div className="text-sm leading-relaxed">
+            {isAssistant ? (
+              <MarkdownRenderer content={textContent} />
+            ) : (
+              <div className="whitespace-pre-wrap">{textContent}</div>
+            )}
+          </div>
+        ) : toolParts.length === 0 ? (
+          <div className="text-sm text-muted-foreground">...</div>
+        ) : null}
+
+        {/* Timestamp */}
+        <p className="mt-1.5 text-xs opacity-60">
+          {new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      </div>
+      {isUser && (
+        <Avatar className="h-8 w-8 shrink-0">
+          <AvatarFallback className="bg-secondary">
+            <User className="h-4 w-4" />
+          </AvatarFallback>
+        </Avatar>
+      )}
     </div>
   );
 }
